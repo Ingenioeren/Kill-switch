@@ -36,6 +36,8 @@ def resource_path(rel: str) -> str:
 APP_ICON_PATH = resource_path("app.ico")
 
 WM_HOTKEY = 0x0312
+MUTEX_NAME = "Global\\KillSwitchSingleInstance"
+SW_RESTORE = 9
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -45,6 +47,7 @@ MOD_NOREPEAT = 0x4000
 
 user32 = ctypes.windll.user32
 shell32 = ctypes.windll.shell32
+kernel32 = ctypes.windll.kernel32
 
 # Ensure correct pointer/int sizes for 64-bit Windows when dealing with WndProc hooks
 LONG_PTR = ctypes.c_longlong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_long
@@ -63,6 +66,22 @@ user32.GetWindowLongPtrW.restype = LONG_PTR
 user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.CallWindowProcW.restype = LRESULT
 user32.CallWindowProcW.argtypes = [WNDPROC, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+user32.FindWindowW.restype = wintypes.HWND
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.ShowWindow.restype = wintypes.BOOL
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.SetForegroundWindow.restype = wintypes.BOOL
+
+kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+kernel32.ReleaseMutex.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+
+ERROR_ALREADY_EXISTS = 183
+_single_instance_mutex = None
 
 # Virtual-key codes (minimal set; extend as needed)
 VK = {
@@ -125,6 +144,48 @@ def relaunch_as_admin_or_exit():
         # User likely canceled or system policy denied
         sys.exit(1)
     sys.exit(0)
+
+
+def show_existing_instance() -> bool:
+    hwnd = user32.FindWindowW(None, APP_NAME)
+    if not hwnd:
+        return False
+    try:
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+    except Exception:
+        return False
+    return True
+
+
+def acquire_single_instance() -> bool:
+    global _single_instance_mutex
+    _single_instance_mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    if not _single_instance_mutex:
+        return True
+    if ctypes.GetLastError() == ERROR_ALREADY_EXISTS:
+        show_existing_instance()
+        try:
+            kernel32.CloseHandle(_single_instance_mutex)
+        except Exception:
+            pass
+        _single_instance_mutex = None
+        return False
+    return True
+
+
+def release_single_instance():
+    global _single_instance_mutex
+    if _single_instance_mutex:
+        try:
+            kernel32.ReleaseMutex(_single_instance_mutex)
+        except Exception:
+            pass
+        try:
+            kernel32.CloseHandle(_single_instance_mutex)
+        except Exception:
+            pass
+        _single_instance_mutex = None
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -1386,6 +1447,10 @@ class KillSwitchApp:
 
     def show_window(self):
         self.root.deiconify()
+        try:
+            self.root.state("normal")
+        except Exception:
+            pass
         self.root.lift()
         try:
             self.root.focus_force()
@@ -1425,6 +1490,7 @@ class KillSwitchApp:
         except Exception:
             pass
         self.root.destroy()
+        release_single_instance()
         try:
             sys.exit(0)
         except Exception:
@@ -1449,6 +1515,9 @@ def main():
 
     # UAC prompt on launch if not admin
     relaunch_as_admin_or_exit()
+
+    if not acquire_single_instance():
+        return
 
     root = tk.Tk()
     root.withdraw()
