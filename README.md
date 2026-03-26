@@ -1,4 +1,4 @@
-## Kill Switch
+# Network Kill Switch
 
 Windows desktop app for instantly disabling and restoring selected network adapters with global hotkeys.
 

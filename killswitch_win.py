@@ -26,7 +26,7 @@ from datetime import datetime
 from time import perf_counter
 
 APP_NAME = "Kill switch"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), f".{APP_NAME.lower()}.json")
 def resource_path(rel: str) -> str:
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -458,6 +458,7 @@ class KillSwitchApp:
 
         self.kill_program_name = self.cfg.get("kill_program_name", "")
         self.kill_on_disable = bool(self.cfg.get("kill_on_disable", False))
+        self.kill_mode_str = self.cfg.get("kill_mode", "both")
         self.process_names: list[str] = []
         if "blocked_keys" not in self.cfg:
             self.cfg["blocked_keys"] = BLOCKED_KEYS_DEFAULT[:]
@@ -472,14 +473,15 @@ class KillSwitchApp:
         self.hotkey_enable_failed = False
 
         self.status_var = tk.StringVar(value="Kill switch: ?")
-        self.hk_disable_var = tk.StringVar(value=f"Disable Hotkey: {self.hotkey_disable_str}")
-        self.hk_disable_state_var = tk.StringVar(value="(registering...)")
-        self.hk_enable_var = tk.StringVar(value=f"Enable Hotkey: {self.hotkey_enable_str}")
-        self.hk_enable_state_var = tk.StringVar(value="(registering...)")
+        self.hk_disable_var = tk.StringVar(value=self.hotkey_disable_str)
+        self.hk_disable_state_var = tk.StringVar(value="...")
+        self.hk_enable_var = tk.StringVar(value=self.hotkey_enable_str)
+        self.hk_enable_state_var = tk.StringVar(value="...")
         self.ready_var = tk.StringVar(value="Ready: ?")
         self.log_lines: list[str] = []
         self.kill_name_var = tk.StringVar(value=self.kill_program_name)
         self.kill_on_disable_var = tk.BooleanVar(value=self.kill_on_disable)
+        self.kill_mode_var = tk.StringVar(value=self.kill_mode_str)
 
         # Tray related
         self.tray_icon = None
@@ -493,105 +495,192 @@ class KillSwitchApp:
 
         program_tab = tk.Frame(notebook)
         about_tab = tk.Frame(notebook)
-        notebook.add(program_tab, text="Program")
-        notebook.add(about_tab, text="About")
+        notebook.add(program_tab, text="  Kill Switch  ")
+        notebook.add(about_tab, text="  About  ")
 
-        frm = tk.Frame(program_tab, padx=12, pady=12)
-        frm.pack()
-
-        about_frame = tk.Frame(about_tab, padx=16, pady=16)
+        # == About Tab ==
+        about_frame = tk.Frame(about_tab, padx=24, pady=20)
         about_frame.pack(fill="both", expand=True, anchor="nw")
-        tk.Label(about_frame, text=APP_NAME, font=("Segoe UI", 16, "bold")).pack(anchor="w", pady=(0, 6))
-        tk.Label(about_frame, text=f"Version: {APP_VERSION}", font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 10))
-        tk.Label(about_frame, text="Made by Ingenioeren", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 6))
-        link = tk.Label(about_frame, text="GitHub: https://github.com/Ingenioeren", font=("Segoe UI", 10), fg="blue", cursor="hand2")
-        link.pack(anchor="w", pady=(0, 10))
+
+        # Header
+        tk.Label(about_frame, text=APP_NAME, font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 2))
+        tk.Label(about_frame, text=f"Version {APP_VERSION}  —  Windows Network Kill Switch",
+            font=("Segoe UI", 9), fg="#666").pack(anchor="w", pady=(0, 2))
+
+        tk.Frame(about_frame, height=1, bg="#dddddd").pack(fill="x", pady=(8, 12))
+
+        # Author row
+        author_row = tk.Frame(about_frame)
+        author_row.pack(anchor="w", pady=(0, 2))
+        tk.Label(author_row, text="Made by ", font=("Segoe UI", 10)).pack(side="left")
+        tk.Label(author_row, text="Ingenioeren", font=("Segoe UI", 10, "bold")).pack(side="left")
+
+        link = tk.Label(about_frame, text="github.com/Ingenioeren",
+            font=("Segoe UI", 9), fg="#1565c0", cursor="hand2")
+        link.pack(anchor="w", pady=(2, 14))
         link.bind("<Button-1>", lambda _e: webbrowser.open("https://github.com/Ingenioeren"))
-        about_text = (
-            "How to use:\n"
-            "1. Select which network adapters to disable in the Network Adapter Disable List.\n"
-            "2. Press Disable Network Adapters (or the disable hotkey) to cut connections.\n"
-            "3. Press Enable Network Adapters (or the enable hotkey) to restore connections.\n"
-            "4. Optionally choose a program to kill and enable 'Kill on Disable'.\n"
-            "5. Use the tray icon to show/hide and toggle the kill switch.\n"
-            "Enable will not relaunch the program.\n\n"
-            "Reliability:\n"
-            "This tool uses Windows network adapter controls and requires admin rights.\n"
-            "For best reliability, keep only the network adapters you want to control selected\n"
-            "and avoid hotkey conflicts.\n\n"
-            "Usage is on your own responsibility."
-        )
-        tk.Label(about_frame, text=about_text, justify="left").pack(anchor="w")
 
-        top = tk.Frame(frm)
-        top.grid(row=0, column=0, columnspan=2, sticky="w")
+        tk.Frame(about_frame, height=1, bg="#dddddd").pack(fill="x", pady=(0, 12))
 
-        self.status_box = tk.Label(top, text="Inactive", width=14, relief="solid", bd=1, padx=6, pady=4)
-        self.status_box.pack(side="left")
-        self.ready_box = tk.Label(top, text="Not Ready", width=14, relief="solid", bd=1, padx=6, pady=4)
-        self.ready_box.pack(side="left", padx=(8, 0))
+        # Quick-start section
+        tk.Label(about_frame, text="Quick Start", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
+        steps = [
+            "1.  Tick the network adapters you want to disable on the right panel.",
+            "2.  Choose a Kill Mode — Internet, Program, or Both.",
+            "3.  Press the big button (or the Disable hotkey) to activate.",
+            "4.  Press again (or the Enable hotkey) to restore your connection.",
+        ]
+        for s in steps:
+            tk.Label(about_frame, text=s, font=("Segoe UI", 9), justify="left").pack(anchor="w", pady=1)
 
-        kill_line = tk.Frame(frm)
-        kill_line.grid(row=1, column=0, columnspan=2, pady=(10, 0), sticky="w")
-        tk.Label(kill_line, text="Kill Program:", width=12, anchor="w").pack(side="left")
-        self.kill_combo = ttk.Combobox(kill_line, textvariable=self.kill_name_var, width=22, state="readonly")
-        self.kill_combo.pack(side="left")
-        self.kill_combo.bind("<<ComboboxSelected>>", self.on_program_selection)
-        self.kill_btn = tk.Button(kill_line, text="Kill Now", width=10, command=self.on_kill_now)
-        self.kill_btn.pack(side="left", padx=(6, 0))
+        tk.Frame(about_frame, height=1, bg="#dddddd").pack(fill="x", pady=(10, 10))
 
-        self.kill_on_disable_chk = tk.Checkbutton(
-            frm,
-            text="Kill program on network adapter disable",
-            variable=self.kill_on_disable_var,
-            command=self.on_kill_on_disable_toggle,
-        )
-        self.kill_on_disable_chk.grid(row=2, column=0, pady=(6, 0), sticky="w")
+        # Notes section
+        tk.Label(about_frame, text="Notes", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 4))
+        notes = [
+            "•  Requires administrator rights to enable/disable adapters.",
+            "•  Re-enabling the kill switch will NOT relaunch killed programs.",
+            "•  The last selected program is remembered between sessions.",
+            "•  Avoid hotkey combos that conflict with your game or other apps.",
+            "•  Use Ctrl+Alt+K to disable and Ctrl+Alt+E to re-enable (default).",
+        ]
+        for n in notes:
+            tk.Label(about_frame, text=n, font=("Segoe UI", 9), justify="left", fg="#333").pack(anchor="w", pady=1)
 
-        self.toggle_btn = tk.Button(frm, text="Disable Network Adapters", width=22, command=self.on_toggle_clicked)
-        self.toggle_btn.grid(row=3, column=0, pady=(10, 0), sticky="w")
+        tk.Frame(about_frame, height=1, bg="#dddddd").pack(fill="x", pady=(10, 10))
 
-        refresh_frame = tk.Frame(frm)
-        refresh_frame.grid(row=3, column=1, pady=(10, 0), sticky="e")
-        self.refresh_adapters_btn = tk.Button(refresh_frame, text="Refresh Network Adapters", width=22, command=self.refresh_adapters_only)
-        self.refresh_adapters_btn.pack(anchor="e")
-        self.refresh_programs_btn = tk.Button(refresh_frame, text="Refresh Programs", width=16, command=self.refresh_programs_only)
-        self.refresh_programs_btn.pack(anchor="e", pady=(4, 0))
+        tk.Label(about_frame, text="Use at your own risk.",
+            font=("Segoe UI", 8), fg="#999").pack(anchor="w")
 
-        hk_line1 = tk.Frame(frm)
-        hk_line1.grid(row=4, column=0, columnspan=2, pady=(10, 0), sticky="w")
-        tk.Label(hk_line1, textvariable=self.hk_disable_var, width=26, anchor="w").pack(side="left")
-        self.hk_disable_state_label = tk.Label(hk_line1, textvariable=self.hk_disable_state_var, width=14, anchor="w")
-        self.hk_disable_state_label.pack(side="left")
+        # == Kill Switch Tab ==
+        # Button style shared across all secondary buttons
+        _BTN = dict(relief="raised", bd=2, cursor="hand2",
+                    bg="#37474f", fg="white",
+                    activebackground="#263238", activeforeground="white")
 
-        hk_line2 = tk.Frame(frm)
-        hk_line2.grid(row=5, column=0, columnspan=2, pady=(2, 0), sticky="w")
-        tk.Label(hk_line2, textvariable=self.hk_enable_var, width=26, anchor="w").pack(side="left")
-        self.hk_enable_state_label = tk.Label(hk_line2, textvariable=self.hk_enable_state_var, width=14, anchor="w")
-        self.hk_enable_state_label.pack(side="left")
-        # Ready indicator now shown in top status box
-
-        self.set_disable_hk_btn = tk.Button(frm, text="Set Disable Hotkey...", width=22, command=self.on_set_disable_hotkey)
-        self.set_disable_hk_btn.grid(row=6, column=0, pady=(10, 0), sticky="w")
-
-        self.set_enable_hk_btn = tk.Button(frm, text="Set Enable Hotkey...", width=22, command=self.on_set_enable_hotkey)
-        self.set_enable_hk_btn.grid(row=6, column=1, pady=(10, 0), sticky="e")
-
-        self.hide_btn = tk.Button(frm, text="Hide to Tray", width=18, command=self.hide_to_tray)
-        self.hide_btn.grid(row=7, column=0, pady=(10, 0), sticky="w")
-
-        self.adapter_frame = tk.LabelFrame(frm, text="Network Adapter Disable List", padx=8, pady=6)
-        self.adapter_frame.grid(row=0, column=2, rowspan=7, padx=(12, 0), sticky="ns")
-
-        self.log_frame = tk.LabelFrame(frm, text="Log", padx=8, pady=6)
-        self.log_frame.grid(row=8, column=0, columnspan=3, pady=(8, 0), sticky="we")
-        self.log_text = tk.Text(self.log_frame, height=6, width=58, state="disabled", wrap="none")
+        # Log anchored to bottom first so it never gets squeezed out
+        self.log_frame = tk.LabelFrame(program_tab, text=" Log ", font=("Segoe UI", 9, "bold"),
+            padx=8, pady=6)
+        self.log_frame.pack(side="bottom", fill="x", padx=14, pady=(0, 14))
+        self.log_text = tk.Text(self.log_frame, height=5, state="disabled",
+            wrap="none", font=("Consolas", 8))
         self.log_scroll = tk.Scrollbar(self.log_frame, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=self.log_scroll.set)
         self.log_text.pack(side="left", fill="both", expand=True)
         self.log_scroll.pack(side="right", fill="y")
 
+        # Main area: left controls | right adapters
+        tab_frame = tk.Frame(program_tab)
+        tab_frame.pack(side="top", fill="both", expand=True)
+
+        left = tk.Frame(tab_frame, padx=14, pady=14)
+        left.pack(side="left", fill="both", expand=True)
+
+        tk.Frame(tab_frame, width=1, bg="#cccccc").pack(side="left", fill="y", pady=8)
+
+        right = tk.Frame(tab_frame, padx=10, pady=14)
+        right.pack(side="right", fill="y")
+
+        # -- Status Row --
+        status_row = tk.Frame(left)
+        status_row.pack(fill="x", pady=(0, 10))
+        self.status_box = tk.Label(status_row, text="Inactive", width=10,
+            font=("Segoe UI", 9, "bold"), fg="white", bg="#1565c0", padx=10, pady=5)
+        self.status_box.pack(side="left")
+        self.ready_box = tk.Label(status_row, text="Not Ready", width=10,
+            font=("Segoe UI", 9), fg="white", bg="#9e9e9e", padx=10, pady=5)
+        self.ready_box.pack(side="left", padx=(6, 0))
+
+        # -- Big Toggle Button --
+        self.toggle_btn = tk.Button(left, text="ACTIVATE KILL SWITCH",
+            command=self.on_toggle_clicked,
+            font=("Segoe UI", 12, "bold"),
+            bg="#c62828", fg="white",
+            activebackground="#b71c1c", activeforeground="white",
+            relief="raised", bd=3, cursor="hand2", pady=12)
+        self.toggle_btn.pack(fill="x", pady=(0, 14))
+
+        # -- Kill Mode --
+        mode_frame = tk.LabelFrame(left, text=" Kill Mode ", font=("Segoe UI", 9, "bold"),
+            padx=12, pady=8)
+        mode_frame.pack(fill="x", pady=(0, 10))
+        for val, label in [
+            ("internet", "Internet only  —  disable network adapters"),
+            ("program",  "Program only   —  terminate selected process"),
+            ("both",     "Both           —  disable adapters + kill process"),
+        ]:
+            tk.Radiobutton(mode_frame, text=label, variable=self.kill_mode_var,
+                value=val, font=("Segoe UI", 9),
+                command=self._on_kill_mode_change).pack(anchor="w", pady=2)
+
+        # -- Program --
+        self.prog_frame = tk.LabelFrame(left, text=" Program ", font=("Segoe UI", 9, "bold"),
+            padx=12, pady=8)
+        self.prog_frame.pack(fill="x", pady=(0, 10))
+        prog_row = tk.Frame(self.prog_frame)
+        prog_row.pack(fill="x")
+        tk.Label(prog_row, text="Process:", font=("Segoe UI", 9), width=8, anchor="w").pack(side="left")
+        self.kill_combo = ttk.Combobox(prog_row, textvariable=self.kill_name_var, width=22, state="readonly")
+        self.kill_combo.pack(side="left", padx=(4, 6))
+        self.kill_combo.bind("<<ComboboxSelected>>", self.on_program_selection)
+        self.kill_btn = tk.Button(prog_row, text="Kill Now", font=("Segoe UI", 9),
+            padx=8, pady=3, command=self.on_kill_now, **_BTN)
+        self.kill_btn.pack(side="left")
+        self.kill_on_disable_chk = tk.Checkbutton(
+            self.prog_frame,
+            text="Auto-kill when kill switch activates  (Both mode)",
+            variable=self.kill_on_disable_var,
+            font=("Segoe UI", 9),
+            command=self.on_kill_on_disable_toggle,
+        )
+        self.kill_on_disable_chk.pack(anchor="w", pady=(6, 0))
+
+        # -- Hotkeys --
+        hk_frame = tk.LabelFrame(left, text=" Hotkeys ", font=("Segoe UI", 9, "bold"),
+            padx=12, pady=8)
+        hk_frame.pack(fill="x", pady=(0, 10))
+        hk_inner = tk.Frame(hk_frame)
+        hk_inner.pack(fill="x")
+        hk_inner.columnconfigure(1, weight=1)
+
+        tk.Label(hk_inner, text="Disable:", font=("Segoe UI", 9), width=8, anchor="w").grid(row=0, column=0, sticky="w")
+        tk.Label(hk_inner, textvariable=self.hk_disable_var, font=("Segoe UI", 9, "bold"), anchor="w").grid(row=0, column=1, sticky="w", padx=(4, 4))
+        self.hk_disable_state_label = tk.Label(hk_inner, textvariable=self.hk_disable_state_var,
+            font=("Segoe UI", 9), width=7, anchor="w")
+        self.hk_disable_state_label.grid(row=0, column=2, sticky="w")
+        tk.Button(hk_inner, text="Set…", font=("Segoe UI", 8), padx=6, pady=2,
+            command=self.on_set_disable_hotkey, **_BTN).grid(row=0, column=3, padx=(6, 0))
+
+        tk.Label(hk_inner, text="Enable:", font=("Segoe UI", 9), width=8, anchor="w").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        tk.Label(hk_inner, textvariable=self.hk_enable_var, font=("Segoe UI", 9, "bold"), anchor="w").grid(row=1, column=1, sticky="w", padx=(4, 4), pady=(4, 0))
+        self.hk_enable_state_label = tk.Label(hk_inner, textvariable=self.hk_enable_state_var,
+            font=("Segoe UI", 9), width=7, anchor="w")
+        self.hk_enable_state_label.grid(row=1, column=2, sticky="w", pady=(4, 0))
+        tk.Button(hk_inner, text="Set…", font=("Segoe UI", 8), padx=6, pady=2,
+            command=self.on_set_enable_hotkey, **_BTN).grid(row=1, column=3, padx=(6, 0), pady=(4, 0))
+
+        # -- Bottom Buttons --
+        btn_row = tk.Frame(left)
+        btn_row.pack(fill="x", pady=(0, 4))
+        self.hide_btn = tk.Button(btn_row, text="Hide to Tray", font=("Segoe UI", 9),
+            padx=10, pady=4, command=self.hide_to_tray, **_BTN)
+        self.hide_btn.pack(side="left")
+        self.refresh_adapters_btn = tk.Button(btn_row, text="Refresh Adapters",
+            font=("Segoe UI", 9), padx=10, pady=4,
+            command=self.refresh_adapters_only, **_BTN)
+        self.refresh_adapters_btn.pack(side="left", padx=(6, 0))
+        self.refresh_programs_btn = tk.Button(btn_row, text="Refresh Programs",
+            font=("Segoe UI", 9), padx=10, pady=4,
+            command=self.refresh_programs_only, **_BTN)
+        self.refresh_programs_btn.pack(side="left", padx=(6, 0))
+
+        # -- Adapter Frame (right panel, clearly separated) --
+        self.adapter_frame = tk.LabelFrame(right, text=" Network Adapters ",
+            font=("Segoe UI", 9, "bold"), padx=8, pady=6)
+        self.adapter_frame.pack(fill="both", expand=True)
+
         self.refresh_status()
+        self.root.after(100, self._on_kill_mode_change)  # apply initial mode state after widgets exist
         self.register_hotkey_from_string(self.hotkey_disable_str, self.hotkey_disable_id, silent_fail=False)
         self.register_hotkey_from_string(self.hotkey_enable_str, self.hotkey_enable_id, silent_fail=False)
         self.hook_wm_hotkey()
@@ -603,19 +692,20 @@ class KillSwitchApp:
 
     def set_status_box(self, active: bool):
         if active:
-            self.status_box.configure(text="Active", fg="white", bg="#b00020")
+            self.status_box.configure(text="Active", fg="white", bg="#c62828")
         else:
-            self.status_box.configure(text="Inactive", fg="white", bg="#1976d2")
+            self.status_box.configure(text="Inactive", fg="white", bg="#1565c0")
+        self._update_toggle_btn()
         self.update_tray_icon_image()
 
     def set_hotkey_ui_state(self, which: str, ok: bool, hk: str):
         if which == "disable":
-            self.hk_disable_var.set(f"Disable Hotkey: {hk}")
+            self.hk_disable_var.set(hk)
             label = self.hk_disable_state_label
             var = self.hk_disable_state_var
             self.hotkey_disable_failed = not ok
         else:
-            self.hk_enable_var.set(f"Enable Hotkey: {hk}")
+            self.hk_enable_var.set(hk)
             label = self.hk_enable_state_label
             var = self.hk_enable_state_var
             self.hotkey_enable_failed = not ok
@@ -661,6 +751,39 @@ class KillSwitchApp:
         self.cfg["kill_on_disable"] = self.kill_on_disable
         save_config(self.cfg)
 
+    def _on_kill_mode_change(self):
+        mode = self.kill_mode_var.get()
+        self.cfg["kill_mode"] = mode
+        save_config(self.cfg)
+        prog_on = mode in ("program", "both")
+        net_on = mode in ("internet", "both")
+        self.kill_combo.configure(state="readonly" if prog_on else "disabled")
+        self.kill_btn.configure(state="normal" if prog_on else "disabled")
+        # kill_on_disable checkbox only meaningful in "both" mode
+        self.kill_on_disable_chk.configure(state="normal" if mode == "both" else "disabled")
+        for cb in self.adapter_checks.values():
+            cb.configure(state="normal" if net_on else "disabled")
+        self.refresh_adapters_btn.configure(state="normal" if net_on else "disabled")
+        self._update_toggle_btn()
+
+    def _update_toggle_btn(self):
+        mode = self.kill_mode_var.get() if hasattr(self, "kill_mode_var") else "both"
+        if self.killed and mode != "program":
+            self.toggle_btn.configure(
+                text="RESTORE NETWORK",
+                bg="#2e7d32", activebackground="#1b5e20",
+            )
+        else:
+            labels = {
+                "internet": "DISABLE INTERNET",
+                "program":  "KILL PROGRAM",
+                "both":     "ACTIVATE KILL SWITCH",
+            }
+            self.toggle_btn.configure(
+                text=labels.get(mode, "ACTIVATE KILL SWITCH"),
+                bg="#c62828", activebackground="#b71c1c",
+            )
+
     def kill_program(self, name: str) -> bool:
         name = (name or "").strip()
         if not name:
@@ -689,13 +812,19 @@ class KillSwitchApp:
             names = list_running_processes()
         except Exception:
             names = []
+        # Always keep the saved program in the list even if it's not currently running
+        saved = self.kill_program_name
+        if saved and saved not in names:
+            names = [saved] + names
         names = [""] + names
         self.process_names = names
         def apply():
             self.kill_combo["values"] = self.process_names
-            # If current name not in list, keep it; otherwise keep selection.
-            if self.kill_name_var.get() in self.process_names:
-                self.kill_combo.set(self.kill_name_var.get())
+            current = self.kill_name_var.get()
+            if current in self.process_names:
+                self.kill_combo.set(current)
+            elif saved in self.process_names:
+                self.kill_combo.set(saved)
             else:
                 self.kill_combo.set("")
             self.on_program_selection()
@@ -703,7 +832,11 @@ class KillSwitchApp:
 
     def on_program_selection(self, _event=None):
         name = self.kill_name_var.get().strip()
-        if not name:
+        if name:
+            self.kill_program_name = name
+            self.cfg["kill_program_name"] = name
+            save_config(self.cfg)
+        else:
             if self.kill_on_disable_var.get():
                 self.kill_on_disable_var.set(False)
                 self.kill_on_disable = False
@@ -815,7 +948,6 @@ class KillSwitchApp:
                 self.ui_call(lambda: self.update_adapter_list(names, default_set, connected_set))
 
                 self.ui_call(lambda: self.status_var.set("Kill switch: ON" if self.killed else "Kill switch: OFF"))
-                self.ui_call(lambda: self.toggle_btn.config(text="Enable Network Adapters" if self.killed else "Disable Network Adapters"))
                 self.ui_call(lambda: self.set_status_box(self.killed))
                 if refresh_programs:
                     self.refresh_process_list()
@@ -836,58 +968,81 @@ class KillSwitchApp:
         self.refresh_process_list()
 
     def disable_network(self):
-        self.log("Disabling selected network adapters...")
-        ifaces = list_interfaces()
-        selected = self.get_selected_adapters()
-        if not selected:
-            self.log("No network adapters selected.")
-            try:
-                self.ui_call(lambda: messagebox.showwarning(
-                    "No network adapters selected",
-                    "Select at least one network adapter in the Network Adapter Disable List first."
-                ))
-            except Exception:
-                pass
-            self.killed = False
-            return
-        to_disable = [
-            i["name"]
-            for i in ifaces
-            if i["type"].lower() != "loopback"
-            and i["admin_state"].lower() == "enabled"
-            and (i["name"] in selected)
-        ]
-        self.log(f"Disabling {len(to_disable)} network adapter(s)...")
-        if not to_disable:
-            self.log("No enabled network adapters matched.")
-            try:
-                self.ui_call(lambda: messagebox.showwarning(
-                    "No network adapters matched",
-                    "No enabled network adapters were found to disable.\n"
-                    "Check adapter names and status, then try again."
-                ))
-            except Exception:
-                pass
-            self.killed = False
-            return
-        self.enabled_before_kill = to_disable[:]
-        self.cfg["enabled_before_kill"] = self.enabled_before_kill
-        save_config(self.cfg)
+        mode = self.kill_mode_var.get()
+        do_net = mode in ("internet", "both")
+        do_prog = mode == "program" or (mode == "both" and self.kill_on_disable_var.get())
 
-        start = perf_counter()
-        ok = set_adapters_admin_ps(to_disable, enabled=False)
-        if not ok:
-            for name in to_disable:
-                self.log(f"Disabling: {name}")
-                set_interface_admin(name, enabled=False)
-        elapsed_ms = (perf_counter() - start) * 1000.0
-        self.log(f"Disable time: {elapsed_ms:.0f} ms")
-        self.killed = len(to_disable) > 0
-        if self.kill_on_disable:
-            try:
-                self.kill_program(self.kill_name_var.get().strip())
-            except Exception:
-                pass
+        if do_net:
+            self.log("Disabling selected network adapters...")
+            ifaces = list_interfaces()
+            selected = self.get_selected_adapters()
+            if not selected:
+                self.log("No network adapters selected.")
+                try:
+                    self.ui_call(lambda: messagebox.showwarning(
+                        "No network adapters selected",
+                        "Select at least one network adapter in the adapter list first."
+                    ))
+                except Exception:
+                    pass
+                if not do_prog:
+                    self.killed = False
+                    return
+            else:
+                to_disable = [
+                    i["name"]
+                    for i in ifaces
+                    if i["type"].lower() != "loopback"
+                    and i["admin_state"].lower() == "enabled"
+                    and (i["name"] in selected)
+                ]
+                self.log(f"Disabling {len(to_disable)} network adapter(s)...")
+                if not to_disable:
+                    self.log("No enabled network adapters matched.")
+                    try:
+                        self.ui_call(lambda: messagebox.showwarning(
+                            "No network adapters matched",
+                            "No enabled network adapters were found to disable.\n"
+                            "Check adapter names and status, then try again."
+                        ))
+                    except Exception:
+                        pass
+                    if not do_prog:
+                        self.killed = False
+                        return
+                else:
+                    self.enabled_before_kill = to_disable[:]
+                    self.cfg["enabled_before_kill"] = self.enabled_before_kill
+                    save_config(self.cfg)
+                    start = perf_counter()
+                    ok = set_adapters_admin_ps(to_disable, enabled=False)
+                    if not ok:
+                        for name in to_disable:
+                            self.log(f"Disabling: {name}")
+                            set_interface_admin(name, enabled=False)
+                    elapsed_ms = (perf_counter() - start) * 1000.0
+                    self.log(f"Disable time: {elapsed_ms:.0f} ms")
+                    self.killed = True
+
+        if do_prog:
+            name = self.kill_name_var.get().strip()
+            if name:
+                try:
+                    self.kill_program(name)
+                    self.killed = True
+                except Exception:
+                    pass
+            elif mode == "program":
+                self.log("No program selected.")
+                try:
+                    self.ui_call(lambda: messagebox.showwarning(
+                        "No program selected",
+                        "Select a program from the Process list first."
+                    ))
+                except Exception:
+                    pass
+                self.killed = False
+                return
 
     def enable_network(self):
         self.log("Enabling network adapters...")
@@ -911,8 +1066,9 @@ class KillSwitchApp:
     def on_toggle_clicked(self):
         def work():
             try:
+                mode = self.kill_mode_var.get()
                 self.log("Toggle clicked.")
-                if self.killed:
+                if self.killed and mode != "program":
                     self.enable_network()
                 else:
                     self.disable_network()
@@ -941,7 +1097,8 @@ class KillSwitchApp:
         def work():
             try:
                 self.log("Enable hotkey pressed.")
-                self.enable_network()
+                if self.kill_mode_var.get() != "program":
+                    self.enable_network()
                 self.refresh_status(log_summary=False)
             except Exception as e:
                 self.log(f"Enable error: {e}")
@@ -980,13 +1137,7 @@ class KillSwitchApp:
                 messagebox.showerror("Hotkey", str(e))
             return False
 
-        GTA_KEYS = {
-            # GTA V default PC controls (main keys)
-            "W", "A", "S", "D", "SPACE", "V", "Q", "R", "F", "M",
-            "TAB", "CAPSLOCK", "INSERT", "DELETE",
-            "F1", "F2", "F3",
-        }
-        blocked = {k.upper() for k in self.blocked_keys} | GTA_KEYS
+        blocked = {k.upper() for k in self.blocked_keys}
         if key_name in blocked:
             msg = (
                 f'"{hk}" uses a blocked key "{key_name}".\n'
@@ -1287,6 +1438,15 @@ class KillSwitchApp:
 
 
 def main():
+    # Hide the console window immediately (when running as .py, not PyInstaller)
+    if os.name == "nt" and not getattr(sys, "frozen", False):
+        try:
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        except Exception:
+            pass
+
     # UAC prompt on launch if not admin
     relaunch_as_admin_or_exit()
 
